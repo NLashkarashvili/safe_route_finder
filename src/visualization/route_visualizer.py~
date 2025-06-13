@@ -1,0 +1,312 @@
+"""
+Route visualization functionality.
+"""
+from typing import Any, Dict, List
+import networkx as nx
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+import matplotlib.patches as mpatches
+import osmnx as ox
+import geopandas as gpd
+
+
+class RouteVisualizer:
+    def __init__(self):
+        # Create custom colormap for safety visualization
+        self.safety_colors = [
+            (0.8, 0.0, 0.0),  # Red for dangerous
+            (1.0, 0.65, 0.0),  # Orange for moderate
+            (0.0, 0.8, 0.0)    # Green for safe
+        ]
+        self.safety_cmap = LinearSegmentedColormap.from_list('safety', self.safety_colors)
+        
+        # Define POI categories and their visualization properties
+        self.poi_categories = {
+            'police': {'color': 'blue', 'marker': '^', 'label': 'Police', 'zorder': 4, 'size': 100},
+            'hospital': {'color': 'blue', 'marker': '+', 'label': 'Hospital', 'zorder': 4, 'size': 120},
+            'pharmacy': {'color': 'blue', 'marker': 'P', 'label': 'Pharmacy', 'zorder': 4, 'size': 80},
+            'bar': {'color': 'orange', 'marker': 's', 'label': 'Bar/Pub', 'zorder': 4, 'size': 80},
+            'pub': {'color': 'orange', 'marker': 's', 'label': 'Bar/Pub', 'zorder': 4, 'size': 80},
+            'nightclub': {'color': 'orange', 'marker': 's', 'label': 'Nightclub', 'zorder': 4, 'size': 80},
+            'cafe': {'color': 'purple', 'marker': 'o', 'label': 'Cafe', 'zorder': 4, 'size': 80},
+            'restaurant': {'color': 'purple', 'marker': 'o', 'label': 'Restaurant', 'zorder': 4, 'size': 80},
+            'park': {'color': 'green', 'marker': 'p', 'label': 'Park', 'zorder': 3, 'size': 100},
+            'garden': {'color': 'green', 'marker': 'p', 'label': 'Garden', 'zorder': 3, 'size': 100},
+            'station': {'color': 'red', 'marker': 'D', 'label': 'Station', 'zorder': 4, 'size': 100},
+            'theatre': {'color': 'magenta', 'marker': '*', 'label': 'Theatre', 'zorder': 4, 'size': 100},
+            'cinema': {'color': 'magenta', 'marker': '*', 'label': 'Cinema', 'zorder': 4, 'size': 100},
+            'arts_centre': {'color': 'magenta', 'marker': '*', 'label': 'Arts Centre', 'zorder': 4, 'size': 100}
+        }
+
+    def visualize_routes(self, G: nx.MultiDiGraph, routes: Dict[str, List[int]],
+                        route_analyses: Dict[str, Dict], safety_pois=None) -> None:
+        """Visualize both shortest and safest routes with POIs."""
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 7))
+
+        # Plot shortest route
+        self._plot_route(G, routes['shortest'], route_analyses['shortest'],
+                        ax1, "Shortest Route", safety_pois)
+
+        # Plot safest route
+        self._plot_route(G, routes['safest'], route_analyses['safest'],
+                        ax2, "Safest Route", safety_pois)
+
+        plt.tight_layout()
+        plt.show()
+
+    def _plot_route(self, G: nx.MultiDiGraph, route: List[int],
+                   analysis: Dict, ax: Any, title: str, safety_pois=None,
+                   start_name="Starting Point", end_name="Destination") -> None:
+        """Plot a single route with safety information and POIs."""
+        # Plot the base network with background map
+        ox.plot_graph(G, ax=ax, node_size=0, edge_linewidth=0.5, 
+                     edge_color='#999999', bgcolor='w', show=False, close=False)
+        
+        # Color edges based on safety score
+        self._color_edges_by_safety(G, route, ax)
+        
+        # Initialize POI legend handles
+        poi_legend_handles = []
+        
+        # Add POIs if provided
+        if safety_pois is not None and not safety_pois.empty:
+            poi_legend_handles = self._plot_pois(safety_pois, ax)
+        
+        # Add start and end markers
+        start_node = route[0]
+        end_node = route[-1]
+        ax.scatter(G.nodes[start_node]['x'], G.nodes[start_node]['y'], 
+                  c='red', s=150, zorder=6, marker='*', edgecolor='black', linewidth=1.5, label='Start')
+        ax.scatter(G.nodes[end_node]['x'], G.nodes[end_node]['y'], 
+                  c='darkred', s=150, zorder=6, marker='*', edgecolor='black', linewidth=1.5, label='End')
+        
+        # Add annotations for start and end with custom names
+        ax.annotate(start_name, xy=(G.nodes[start_node]['x'], G.nodes[start_node]['y']), 
+                    xytext=(10, 10), textcoords="offset points", 
+                    fontsize=12, fontweight='bold', color='red',
+                    bbox=dict(facecolor='white', alpha=0.7, edgecolor='red', boxstyle='round,pad=0.5'))
+        ax.annotate(end_name, xy=(G.nodes[end_node]['x'], G.nodes[end_node]['y']), 
+                    xytext=(10, 10), textcoords="offset points", 
+                    fontsize=12, fontweight='bold', color='darkred',
+                    bbox=dict(facecolor='white', alpha=0.7, edgecolor='darkred', boxstyle='round,pad=0.5'))
+        
+        # Add legend
+        self._add_safety_legend(ax, poi_legend_handles)
+        
+        # Add route statistics
+        self._add_route_stats(analysis, ax)
+        
+        ax.set_title(title)
+
+    def _color_edges_by_safety(self, G: nx.MultiDiGraph, route: List[int], ax: Any) -> None:
+        """Color the edges of the route based on their safety scores."""
+        for u, v in zip(route[:-1], route[1:]):
+            edge_data = G[u][v][0]
+            safety_score = edge_data['safety_score']
+            
+            # Normalize safety score to [0, 1] for colormap
+            color = self.safety_cmap(safety_score / 10)
+            
+            # Get the line coordinates for this edge
+            # This is a safer approach than using draw_networkx_edges
+            x1, y1 = G.nodes[u]['x'], G.nodes[u]['y']
+            x2, y2 = G.nodes[v]['x'], G.nodes[v]['y']
+            
+            # Draw the edge with the safety color
+            ax.plot([x1, x2], [y1, y2], color=color, linewidth=4, alpha=0.7, zorder=3)
+
+    def _plot_pois(self, safety_pois: gpd.GeoDataFrame, ax: Any) -> List:
+        """Plot Points of Interest on the map."""
+        legend_handles = []
+        
+        print(f"Plotting POIs: {len(safety_pois)} POIs found")
+        
+        # Check if we have POIs to plot
+        if safety_pois.empty:
+            print("No POIs to plot")
+            return []
+            
+        # Ensure safety_pois is in the correct CRS
+        if hasattr(safety_pois, 'crs') and safety_pois.crs is not None:
+            print(f"POIs CRS: {safety_pois.crs}")
+            if safety_pois.crs != "EPSG:4326":
+                safety_pois = safety_pois.to_crs("EPSG:4326")
+        
+        # Filter for point geometries only
+        point_pois = safety_pois[safety_pois.geometry.type == 'Point']
+        print(f"Found {len(point_pois)} point POIs")
+        
+        if point_pois.empty:
+            return []
+            
+        # Print columns for debugging
+        print(f"POI columns: {point_pois.columns.tolist()}")
+        
+        # First try using the safety_type field that's already set in the data_loader
+        if 'safety_type' in point_pois.columns:
+            print(f"Using safety_type field: {point_pois['safety_type'].value_counts().to_dict()}")
+            
+            # Define styling for each safety type
+            safety_styles = {
+                'positive': {'color': 'blue', 'marker': '^', 'label': 'Safety Enhancing (+2)', 'size': 100},
+                'negative': {'color': 'orange', 'marker': 's', 'label': 'Higher Risk (0/Day, -2/Night)', 'size': 80},
+                'neutral': {'color': 'green', 'marker': 'o', 'label': 'Neutral POIs', 'size': 80}
+            }
+            
+            # Plot each safety type
+            for safety_type, style in safety_styles.items():
+                filtered = point_pois[point_pois['safety_type'] == safety_type]
+                if not filtered.empty:
+                    print(f"Plotting {len(filtered)} {safety_type} POIs")
+                    for _, poi in filtered.iterrows():
+                        x, y = poi.geometry.x, poi.geometry.y
+                        ax.scatter(x, y, color=style['color'], marker=style['marker'],
+                                 s=style['size'], zorder=5, edgecolor='black', linewidth=1.5)
+                    
+                    # Add to legend
+                    legend_handles.append(plt.Line2D([0], [0], marker=style['marker'], color='w',
+                                        markerfacecolor=style['color'], markersize=10,
+                                        label=style['label'], markeredgecolor='black'))
+            
+            if legend_handles:
+                return legend_handles
+        
+        # If safety_type approach didn't work, fall back to categorizing by amenity type
+        print("Falling back to categorizing POIs by amenity type")
+        
+        # Define our POI categories with simpler filtering
+        categories = [
+            {
+                'name': 'Police/Hospital/Pharmacy',
+                'color': 'blue',
+                'marker': '^',
+                'label': 'Safety Enhancing (+2)',
+                'column': 'amenity',
+                'values': ['police', 'hospital', 'pharmacy'],
+                'size': 100
+            },
+            {
+                'name': 'Bars/Pubs/Nightclubs',
+                'color': 'orange',
+                'marker': 's',
+                'label': 'Nightlife (0/Day, -2/Night)',
+                'column': 'amenity',
+                'values': ['bar', 'pub', 'nightclub'],
+                'size': 80
+            },
+            {
+                'name': 'Parks/Gardens',
+                'color': 'green',
+                'marker': 'p',
+                'label': 'Parks (+1/Day, -2/Night)',
+                'column': 'leisure',
+                'values': ['park', 'garden', 'nature_reserve'],
+                'size': 100
+            },
+            {
+                'name': 'Transit',
+                'color': 'red',
+                'marker': 'D',
+                'label': 'Transit (+1/Day, -1/Night)',
+                'column': 'railway',
+                'values': ['station'],
+                'size': 100
+            },
+            {
+                'name': 'Entertainment',
+                'color': 'magenta',
+                'marker': '*',
+                'label': 'Entertainment (+0.5)',
+                'column': 'amenity',
+                'values': ['theatre', 'cinema', 'arts_centre'],
+                'size': 100
+            },
+            {
+                'name': 'Cafes/Restaurants',
+                'color': 'purple',
+                'marker': 'o',
+                'label': 'Food/Cafes (+0.5)',
+                'column': 'amenity',
+                'values': ['cafe', 'restaurant'],
+                'size': 80
+            }
+        ]
+        
+        # Plot each category
+        for category in categories:
+            try:
+                # Check if column exists
+                if category['column'] not in point_pois.columns:
+                    print(f"Column {category['column']} not found in POIs")
+                    continue
+                    
+                # Direct approach - plot all POIs of this type
+                for _, poi in point_pois.iterrows():
+                    # Check if this POI matches the category
+                    if poi[category['column']] in category['values']:
+                        # Plot this POI
+                        x, y = poi.geometry.x, poi.geometry.y
+                        ax.scatter(x, y, color=category['color'], marker=category['marker'],
+                                  s=category['size'], zorder=5, edgecolor='black', linewidth=1.5)
+                        
+                        # Add to legend if not already there
+                        if not any(h.get_label() == category['label'] for h in legend_handles):
+                            legend_handles.append(plt.Line2D([0], [0], marker=category['marker'], 
+                                                 color='w', markerfacecolor=category['color'], 
+                                                 markersize=10, label=category['label'], 
+                                                 markeredgecolor='black'))
+                        
+                        print(f"Plotted POI: {poi.get('name', 'unnamed')} as {category['name']}")
+            except Exception as e:
+                print(f"Error plotting {category['name']} POIs: {e}")
+                
+        # If we didn't find any categorized POIs, plot all as generic POIs
+        if not legend_handles:
+            print("No categorized POIs found, plotting all as generic")
+            for _, poi in point_pois.iterrows():
+                x, y = poi.geometry.x, poi.geometry.y
+                ax.scatter(x, y, color='gray', marker='o', s=50, zorder=5, 
+                          edgecolor='black', linewidth=1.5)
+            
+            legend_handles.append(plt.Line2D([0], [0], marker='o', color='w', 
+                                 markerfacecolor='gray', markersize=10, 
+                                 label='POI', markeredgecolor='black'))
+        
+        return legend_handles
+
+    def _add_safety_legend(self, ax: Any, poi_legend_handles: List) -> None:
+        """Add a legend showing safety score colors and POIs."""
+        # Create safety score legend elements
+        safety_legend = [
+            mpatches.Patch(color=self.safety_colors[0], label='Less Safe'),
+            mpatches.Patch(color=self.safety_colors[1], label='Moderate'),
+            mpatches.Patch(color=self.safety_colors[2], label='Most Safe'),
+            plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='red', 
+                      markersize=10, label='Start', markeredgecolor='black'),
+            plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='darkred', 
+                      markersize=10, label='End', markeredgecolor='black')
+        ]
+        
+        # Combine all legend elements
+        legend_elements = safety_legend + poi_legend_handles
+        
+        # Add the legend with two columns for better organization
+        ax.legend(handles=legend_elements, loc='upper right', 
+                 ncol=1, fontsize=8, framealpha=0.9)
+        
+        # Add a separate legend for POIs at a different location
+        if poi_legend_handles:
+            ax.legend(handles=poi_legend_handles, loc='lower right', 
+                     title='Points of Interest', fontsize=8, 
+                     framealpha=0.9, title_fontsize=9)
+
+    def _add_route_stats(self, analysis: Dict, ax: Any) -> None:
+        """Add route statistics to the plot."""
+        stats_text = (
+            f"Length: {analysis['total_length']:.0f}m\n"
+            f"Avg Safety: {analysis['average_safety_score']:.1f}/10"
+        )
+        ax.text(0.02, 0.98, stats_text,
+                transform=ax.transAxes,
+                bbox=dict(facecolor='white', alpha=0.8),
+                verticalalignment='top')
