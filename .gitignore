@@ -1,6 +1,20 @@
-crime/crime/PCD_OA_LSOA_MSOA_LAD_NOV22_UK_LU.zip
-ukpostcodes/ukpostcodes.csv
-ukpostcodes/Stops.csv
-traffic_flow/Stops.csv
-crime_scores_smoothed.csv
-crime/crime/PCD_OA_LSOA_MSOA_LAD_NOV22_UK_LU/PCD_OA_LSOA_MSOA_LAD_NOV22_UK_LU.csv
+# Ignore everything
+*
+
+# But not these files...
+!.gitignore
+!*.py
+!README.md
+!requirements.txt
+
+# And not these specific files
+!london_crime_map_high_res.png
+!london_crime_map_interactive.html
+!route_map_51.5394_-0.1425_to_51.5367_-0.1448.png
+
+# Even if they are in subdirectories
+!*/
+
+# Ignore everything in subdirectories except .py files
+*/*
+!*/*.py
